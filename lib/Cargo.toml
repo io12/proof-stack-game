@@ -1,0 +1,10 @@
+[package]
+name = "lib"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+itertools = "0.10.5"
+
+[dependencies.metamath-knife]
+git = "https://github.com/io12/metamath-knife"
