@@ -53,7 +53,7 @@ pub fn app() -> Html {
                 None => (true, None),
             };
             html! {
-                <button {disabled} {onclick}>
+                <button class="dep-btn" {disabled} {onclick}>
                     { text }
                 </button>
             }
@@ -118,7 +118,9 @@ pub fn app() -> Html {
             <hr/>
 
             // Steps to pop onto the stack
-            { deps }
+            <div class="dep-btns">
+                { deps }
+            </div>
 
             <hr/>
 
