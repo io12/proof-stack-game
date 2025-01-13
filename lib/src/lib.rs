@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 
 use itertools::Itertools;
 use metamath_knife::{
@@ -37,9 +38,9 @@ impl Context {
             None => db
                 .statements()
                 .find(|stmt| stmt.statement_type() == StatementType::Provable)
-                .expect(
-                    format!("only {} statements", self.metamath_db.statements().count()).as_str(),
-                )
+                .unwrap_or_else(|| {
+                    panic!("only {} statements", self.metamath_db.statements().count())
+                })
                 .address(),
         };
         State {
@@ -61,14 +62,14 @@ impl Context {
 
     fn render_token(&self, token: TokenPtr) -> String {
         let typesetting_data = self.metamath_db.typesetting_result();
-        match typesetting_data.get_alt_html_def(&token) {
+        match typesetting_data.get_alt_html_def(token) {
             Some(token) => from_utf8(token),
-            None => from_utf8(&token),
+            None => from_utf8(token),
         }
     }
 
     fn render_expr(&self, expr: &[Token]) -> String {
-        expr.into_iter().map(|tok| self.render_token(tok)).collect()
+        expr.iter().map(|tok| self.render_token(tok)).collect()
     }
 
     fn render_stmt(&self, stmt: StatementAddress) -> String {
@@ -106,11 +107,14 @@ impl Context {
 
     pub fn render_inference(&self, stmt_addr: StatementAddress) -> String {
         let conclusion = self.render_stmt(stmt_addr);
-        let hyps = self
-            .hyp_addrs(stmt_addr)
-            .into_iter()
-            .map(|hyp_addr| format!("{} <br/>", self.render_stmt(hyp_addr)))
-            .collect::<String>();
+        let hyps =
+            self.hyp_addrs(stmt_addr)
+                .into_iter()
+                .fold(String::new(), |mut out, hyp_addr| {
+                    let hyp_addr = self.render_stmt(hyp_addr);
+                    write!(out, "{hyp_addr} <br/>").unwrap();
+                    out
+                });
         let inner = if hyps.is_empty() {
             conclusion
         } else {
@@ -197,8 +201,7 @@ impl State {
                         let entry = stack.get(sp)?;
                         let subst_h = h
                             .into_iter()
-                            .map(|tok| subst.get(&tok).unwrap_or(&vec![tok]).clone())
-                            .flatten()
+                            .flat_map(|tok| subst.get(&tok).unwrap_or(&vec![tok]).clone())
                             .collect::<Vec<Token>>();
                         if entry != &subst_h {
                             return None;
@@ -252,8 +255,7 @@ impl State {
             }
             let subst_conclusion = conclusion
                 .iter()
-                .map(|tok| subst.get(tok).unwrap_or(&vec![tok.clone()]).clone())
-                .flatten()
+                .flat_map(|tok| subst.get(tok).unwrap_or(&vec![tok.clone()]).clone())
                 .collect::<Vec<Token>>();
             stack.push(subst_conclusion);
             stack
@@ -279,10 +281,9 @@ impl State {
                     .statements_range_address(self.current_level_stmt_addr..)
                     .skip(1)
                     .find(|stmt| stmt.statement_type() == StatementType::Provable)
-                    .expect(
-                        format!("only {} statements", ctx.metamath_db.statements().count())
-                            .as_str(),
-                    )
+                    .unwrap_or_else(|| {
+                        panic!("only {} statements", ctx.metamath_db.statements().count())
+                    })
                     .address(),
 
                 proof_stack: Vec::new(),
