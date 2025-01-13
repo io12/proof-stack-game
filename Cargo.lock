@@ -1383,7 +1383,6 @@ dependencies = [
 name = "trunk-template"
 version = "0.1.0"
 dependencies = [
- "lazy_static",
  "lib",
  "yew",
  "yew-hooks",

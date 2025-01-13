@@ -1,5 +1,5 @@
-use lazy_static::lazy_static;
 use lib::Context;
+use std::cell::LazyCell;
 use yew::prelude::*;
 use yew_hooks::use_local_storage;
 
@@ -9,16 +9,14 @@ fn string_to_html(s: String) -> Html {
 
 #[function_component(App)]
 pub fn app() -> Html {
-    lazy_static! {
-        static ref CTX: Context = Context::load("set.mm", *include_bytes!("/tmp/dump/set.mm"));
-    }
+    let ctx = LazyCell::new(|| Context::load("set.mm", *include_bytes!("/tmp/dump/set.mm")));
     let storage = use_local_storage::<String>(String::from("level"));
-    let state = use_state(|| CTX.initial_state(storage.as_deref()));
-    let current_level_name = CTX.label(state.current_level_stmt_addr);
+    let state = use_state(|| ctx.initial_state(storage.as_deref()));
+    let current_level_name = ctx.label(state.current_level_stmt_addr);
     if storage.as_deref() != Some(&current_level_name) {
         storage.set(current_level_name.clone());
     }
-    let next_level = state.next_level(&CTX);
+    let next_level = state.next_level(&ctx);
     let level_finished = next_level.is_some();
     let next_level_button = {
         let state = state.clone();
@@ -36,14 +34,14 @@ pub fn app() -> Html {
         }
     };
     let deps = state
-        .buttons(&CTX)
+        .buttons(&ctx)
         .into_iter()
         .map(|(stmt_addr, opt_next_state)| {
             let state = state.clone();
             let text = string_to_html(format!(
                 "{} {}",
-                CTX.label(stmt_addr),
-                CTX.render_inference(stmt_addr)
+                ctx.label(stmt_addr),
+                ctx.render_inference(stmt_addr)
             ));
             let (disabled, onclick) = match opt_next_state {
                 Some(next_state) => (
@@ -60,7 +58,7 @@ pub fn app() -> Html {
         })
         .collect::<Html>();
     let stack = state
-        .render_stack(&CTX)
+        .render_stack(&ctx)
         .into_iter()
         .enumerate()
         .map(|(i, expr)| {
@@ -110,7 +108,7 @@ pub fn app() -> Html {
                 { " " }
                 { current_level_name }
                 { " " }
-                { string_to_html(CTX.render_inference(state.current_level_stmt_addr)) }
+                { string_to_html(ctx.render_inference(state.current_level_stmt_addr)) }
                 { " " }
                 { next_level_button }
             </h2>
