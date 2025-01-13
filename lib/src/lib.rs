@@ -95,7 +95,7 @@ impl Context {
         match scopes.get(stmt.label()) {
             Some(frame) => frame
                 .hypotheses
-                .into_iter()
+                .iter()
                 .map(|hyp| match hyp {
                     Hyp::Floating(hyp_addr, _, _) | Hyp::Essential(hyp_addr, _) => *hyp_addr,
                 })
@@ -231,7 +231,7 @@ impl State {
                         let level_frame = scopes.get(level_stmt.label())?;
                         let level_dvs = level_frame
                             .mandatory_dv
-                            .into_iter()
+                            .iter()
                             .map(|(x, y)| {
                                 Some((
                                     names.atom_name(*level_frame.var_list.get(*x)?).into(),
