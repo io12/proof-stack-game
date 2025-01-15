@@ -1,5 +1,6 @@
-use lib::Context;
+use lib::{Context, StatementAddress};
 use std::cell::LazyCell;
+use std::fmt::Write;
 use yew::prelude::*;
 use yew_hooks::use_local_storage;
 
@@ -7,9 +8,23 @@ fn string_to_html(s: String) -> Html {
     Html::from_html_unchecked(AttrValue::from(s))
 }
 
+fn render_inference(ctx: &Context, stmt_addr: StatementAddress) -> String {
+    let (hyps, conclusion) = ctx.render_inference(stmt_addr);
+    let hyps = hyps.into_iter().fold(String::new(), |mut out, hyp| {
+        write!(out, "{hyp} <br/>").unwrap();
+        out
+    });
+    let inference = if hyps.is_empty() {
+        conclusion
+    } else {
+        format!("{hyps} <hr/> {conclusion}")
+    };
+    format!("<div style='display: inline-block'> {inference} </div>")
+}
+
 #[function_component(App)]
 pub fn app() -> Html {
-    let ctx = LazyCell::new(|| Context::load("set.mm", *include_bytes!("/tmp/dump/set.mm")));
+    let ctx = LazyCell::new(|| Context::load("set.mm", include_bytes!("/tmp/dump/set.mm")));
     let storage = use_local_storage::<String>(String::from("level"));
     let state = use_state(|| ctx.initial_state(storage.as_deref()));
     let current_level_name = ctx.label(state.current_level_stmt_addr);
@@ -38,11 +53,8 @@ pub fn app() -> Html {
         .into_iter()
         .map(|(stmt_addr, opt_next_state)| {
             let state = state.clone();
-            let text = string_to_html(format!(
-                "{} {}",
-                ctx.label(stmt_addr),
-                ctx.render_inference(stmt_addr)
-            ));
+            let inference = render_inference(&ctx, stmt_addr);
+            let text = string_to_html(format!("{} {inference}", ctx.label(stmt_addr),));
             let (disabled, onclick) = match opt_next_state {
                 Some(next_state) => (
                     level_finished,
@@ -108,7 +120,7 @@ pub fn app() -> Html {
                 { " " }
                 { current_level_name }
                 { " " }
-                { string_to_html(ctx.render_inference(state.current_level_stmt_addr)) }
+                { string_to_html(render_inference(&ctx, state.current_level_stmt_addr)) }
                 { " " }
                 { next_level_button }
             </h2>

@@ -1,13 +1,14 @@
 use std::collections::HashMap;
-use std::fmt::Write;
 
 use itertools::Itertools;
-use metamath_knife::{
+use metamath_rs::{
     database::DbOptions,
     scopeck::{Frame, Hyp},
-    statement::{StatementAddress, Token, TokenPtr},
+    statement::{Token, TokenPtr},
     Database, StatementRef, StatementType,
 };
+
+pub use metamath_rs::statement::StatementAddress;
 
 pub struct Context {
     metamath_db: Database,
@@ -62,8 +63,8 @@ impl Context {
 
     fn render_token(&self, token: TokenPtr) -> String {
         let typesetting_data = self.metamath_db.typesetting_result();
-        match typesetting_data.get_alt_html_def(token) {
-            Some(token) => from_utf8(token),
+        match typesetting_data.latex_defs.get(token) {
+            Some((_, _, token)) => from_utf8(token),
             None => from_utf8(token),
         }
     }
@@ -78,15 +79,6 @@ impl Context {
             .math_iter()
             .map(|tok| self.render_token(tok.slice))
             .collect()
-    }
-
-    fn render_ascii_stmt(&self, stmt: StatementAddress) -> String {
-        self.metamath_db
-            .statement_by_address(stmt)
-            .math_iter()
-            .map(|tok| from_utf8(&tok))
-            .collect::<Vec<String>>()
-            .join(" ")
     }
 
     fn hyp_addrs(&self, stmt_addr: StatementAddress) -> Vec<StatementAddress> {
@@ -105,36 +97,14 @@ impl Context {
         }
     }
 
-    pub fn render_inference(&self, stmt_addr: StatementAddress) -> String {
+    pub fn render_inference(&self, stmt_addr: StatementAddress) -> (Vec<String>, String) {
         let conclusion = self.render_stmt(stmt_addr);
-        let hyps =
-            self.hyp_addrs(stmt_addr)
-                .into_iter()
-                .fold(String::new(), |mut out, hyp_addr| {
-                    let hyp_addr = self.render_stmt(hyp_addr);
-                    write!(out, "{hyp_addr} <br/>").unwrap();
-                    out
-                });
-        let inner = if hyps.is_empty() {
-            conclusion
-        } else {
-            format!("{hyps} <hr/> {conclusion}")
-        };
-        format!("<div style='display: inline-block'> {inner} </div>")
-    }
-    pub fn render_ascii_inference(&self, stmt_addr: StatementAddress) -> String {
-        let conclusion = self.render_ascii_stmt(stmt_addr);
         let hyps = self
             .hyp_addrs(stmt_addr)
             .into_iter()
-            .map(|hyp_addr| self.render_ascii_stmt(hyp_addr))
-            .collect::<Vec<String>>()
-            .join("   &   ");
-        if hyps.is_empty() {
-            conclusion
-        } else {
-            format!("{hyps}   ->   {conclusion}")
-        }
+            .map(|hyp_addr| self.render_stmt(hyp_addr))
+            .collect();
+        (hyps, conclusion)
     }
 
     pub fn label(&self, stmt: StatementAddress) -> String {
@@ -310,6 +280,13 @@ impl State {
     pub fn stack_swap(&self, i: usize, j: usize) -> Self {
         let mut new = self.clone();
         new.proof_stack.swap(i, j);
+        new
+    }
+
+    pub fn stack_move(&self, src: usize, dst: usize) -> Self {
+        let mut new = self.clone();
+        let e = new.proof_stack.remove(src);
+        new.proof_stack.insert(dst, e);
         new
     }
 }

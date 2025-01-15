@@ -6,5 +6,5 @@ edition = "2021"
 [dependencies]
 itertools = "0.14.0"
 
-[dependencies.metamath-knife]
-git = "https://github.com/io12/metamath-knife"
+[dependencies.metamath-rs]
+git = "https://github.com/metamath/metamath-knife"

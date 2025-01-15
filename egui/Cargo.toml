@@ -1,0 +1,11 @@
+[package]
+name = "proof-stack-game-egui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.30.0"
+egui_extras = { version = "0.30.0", features = ["svg", "image"] }
+lib = { path = "../lib" }
+mathjax_svg = "3.1.2"
+memoize = "0.4.2"
