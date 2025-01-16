@@ -102,11 +102,19 @@ fn main() -> eframe::Result {
                         .show(ui, |ui| {
                             for (i, expr) in state.render_stack(&mm).into_iter().enumerate() {
                                 let image = tex_to_image(expr.clone());
+                                let id = egui::Id::new(i);
                                 ui.horizontal(|ui| {
-                                    let id = egui::Id::new(&expr);
-                                    let resp =
-                                        ui.dnd_drag_source(id, i, |ui| ui.add(image)).response;
-                                    if let Some(j) = resp.dnd_release_payload() {
+                                    if ui.button("Del").clicked() {
+                                        state = state.stack_delete(i);
+                                    }
+                                    if ui.button("Cpy").clicked() {
+                                        state = state.stack_copy(i);
+                                    }
+                                    if let Some(j) = ui
+                                        .dnd_drag_source(id, i, |ui| ui.add(image))
+                                        .response
+                                        .dnd_release_payload()
+                                    {
                                         state = state.stack_move(*j, i);
                                     }
                                 });

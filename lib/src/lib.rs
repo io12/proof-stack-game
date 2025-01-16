@@ -283,6 +283,18 @@ impl State {
         new
     }
 
+    pub fn stack_delete(&self, i: usize) -> Self {
+        let mut new = self.clone();
+        new.proof_stack.remove(i);
+        new
+    }
+
+    pub fn stack_copy(&self, i: usize) -> Self {
+        let mut new = self.clone();
+        new.proof_stack.insert(i, new.proof_stack[i].clone());
+        new
+    }
+
     pub fn stack_move(&self, src: usize, dst: usize) -> Self {
         let mut new = self.clone();
         let e = new.proof_stack.remove(src);
