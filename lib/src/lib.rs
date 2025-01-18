@@ -1,11 +1,13 @@
-use std::collections::HashMap;
+use std::{collections::HashSet, iter};
 
 use itertools::Itertools;
 use metamath_rs::{
     database::DbOptions,
-    scopeck::{Frame, Hyp},
-    statement::{Token, TokenPtr},
-    Database, StatementRef, StatementType,
+    formula::Substitutions,
+    nameck::{Atom, NameReader},
+    scopeck::Hyp,
+    statement::TokenPtr,
+    Database, Formula, StatementRef, StatementType,
 };
 
 pub use metamath_rs::statement::StatementAddress;
@@ -18,17 +20,23 @@ fn from_utf8(bytes: &[u8]) -> String {
     std::str::from_utf8(bytes).unwrap().into()
 }
 
+fn formula_eq(a: &Formula, b: &Formula) -> bool {
+    a == b && a.get_typecode() == b.get_typecode()
+}
+
 impl Context {
     pub fn load(name: impl Into<String>, data: impl Into<Vec<u8>>) -> Self {
         let name = name.into();
         let data = data.into();
         let mut metamath_db = Database::new(DbOptions {
             autosplit: true,
+            incremental: true,
             ..Default::default()
         });
         metamath_db.parse(name.clone(), vec![(name, data)]);
         metamath_db.scope_pass();
         metamath_db.typesetting_pass();
+        metamath_db.grammar_pass();
         Self { metamath_db }
     }
 
@@ -69,8 +77,13 @@ impl Context {
         }
     }
 
-    fn render_expr(&self, expr: &[Token]) -> String {
-        expr.iter().map(|tok| self.render_token(tok)).collect()
+    fn render_formula(&self, formula: &Formula) -> String {
+        let db = &self.metamath_db;
+        let names = db.name_result();
+        iter::once(formula.get_typecode())
+            .chain(formula.as_ref(db))
+            .map(|tok| self.render_token(names.atom_name(tok)))
+            .collect()
     }
 
     fn render_stmt(&self, stmt: StatementAddress) -> String {
@@ -111,122 +124,113 @@ impl Context {
         let l = self.metamath_db.statement_by_address(stmt).label();
         from_utf8(l)
     }
+
+    fn stmt_to_formula(&self, stmt: StatementRef) -> Formula {
+        let db = &self.metamath_db;
+        let grammar = db.grammar_result();
+        let names = db.name_result();
+        grammar
+            .parse_statement(&stmt, names, &mut NameReader::new(names))
+            .unwrap()
+    }
+
+    fn unify_hyps(&self, hyps: &[&Hyp], stack_top: &[Formula]) -> Option<Substitutions> {
+        let db = &self.metamath_db;
+
+        // Ensure no essential hypotheses are ignored
+        if hyps
+            .iter()
+            .rev()
+            .skip(stack_top.len())
+            .any(|hyp| matches!(hyp, Hyp::Essential(_, _)))
+        {
+            return None;
+        }
+
+        let mut substs = Substitutions::new();
+        for (stack_hyp, hyp) in stack_top.iter().rev().zip(hyps.iter().rev()) {
+            let hyp = db.statement_by_address(hyp.address());
+            let hyp = self.stmt_to_formula(hyp);
+            if stack_hyp.get_typecode() != hyp.get_typecode() {
+                return None;
+            }
+            stack_hyp.unify(&hyp, &mut substs).ok()?
+        }
+
+        Some(substs)
+    }
 }
 
-/// The state game
-#[derive(Clone)]
+/// The game state
+#[derive(Clone, Debug)]
 pub struct State {
     /// Index of the statement representing the current level
     pub current_level_stmt_addr: StatementAddress,
 
-    pub proof_stack: Vec<Vec<Token>>,
-}
-
-fn stmt_to_expr(stmt: StatementRef) -> Vec<Token> {
-    stmt.math_iter().map(|tok| tok.slice.into()).collect()
+    pub proof_stack: Vec<Formula>,
 }
 
 impl State {
     fn push(&self, ctx: &Context, step_addr: StatementAddress) -> Option<Self> {
         let db = &ctx.metamath_db;
+        let names = db.name_result();
+        let scopes = db.scope_result();
         let step_stmt = db.statement_by_address(step_addr);
         let step_type = step_stmt.statement_type();
         let proof_stack = if let StatementType::Essential | StatementType::Floating = step_type {
-            let expr = stmt_to_expr(step_stmt);
+            let formula = ctx.stmt_to_formula(step_stmt);
             let mut stack = self.proof_stack.clone();
-            stack.push(expr);
+            stack.push(formula);
             stack
         } else {
             if !matches!(step_type, StatementType::Axiom | StatementType::Provable) {
                 return None;
             }
-            let names = db.name_result();
-            let scopes = db.scope_result();
             let step_frame = scopes.get(step_stmt.label())?;
-            let conclusion = stmt_to_expr(step_stmt);
-            let Frame {
-                mandatory_dv: dvs,
-                hypotheses: hyps,
-                ..
-            } = step_frame;
-            let npop = hyps.len();
+            let conclusion = ctx.stmt_to_formula(step_stmt);
+            let hyps = &step_frame.hypotheses;
             let mut stack = self.proof_stack.clone();
-            let mut sp = stack.len().checked_sub(npop)?;
-            let mut subst = HashMap::<Token, Vec<Token>>::new();
-            for hyp in hyps.iter() {
-                match hyp {
-                    Hyp::Floating(_, var_index, typecode) => {
-                        let entry = stack.get(sp)?;
-                        if &**entry.first()? != names.atom_name(*typecode) {
-                            return None;
-                        }
-                        let var_atom = *step_frame.var_list.get(*var_index)?;
-                        let var = names.atom_name(var_atom);
-                        subst.insert(var.into(), entry.get(1..)?.to_vec());
-                        sp += 1;
-                    }
-                    Hyp::Essential(h_addr, _) => {
-                        let h_stmt = db.statement_by_address(*h_addr);
-                        let h = stmt_to_expr(h_stmt);
-                        let entry = stack.get(sp)?;
-                        let subst_h = h
-                            .into_iter()
-                            .flat_map(|tok| subst.get(&tok).unwrap_or(&vec![tok]).clone())
-                            .collect::<Vec<Token>>();
-                        if entry != &subst_h {
-                            return None;
-                        }
-                        sp += 1;
-                    }
-                }
-                for (x_index, y_index) in dvs.iter() {
-                    let x_atom = *step_frame.var_list.get(*x_index)?;
-                    let y_atom = *step_frame.var_list.get(*y_index)?;
-                    let x = names.atom_name(x_atom);
-                    let y = names.atom_name(y_atom);
-                    let x_vars = subst
-                        .get(x)?
+            let max_num_pop = stack.len().min(hyps.len());
+            let (substs, num_pop) = hyps
+                .iter()
+                .permutations(hyps.len())
+                .cartesian_product(1..=max_num_pop)
+                .find_map(|(hyps, num_pop)| {
+                    let sp = stack.len().checked_sub(num_pop)?;
+                    let stack_hyps = &stack[sp..];
+                    let substs = ctx.unify_hyps(&hyps, stack_hyps)?;
+                    let subst_vars = substs
                         .iter()
-                        .filter(|tok| step_frame.var_list.contains(&names.get_atom(tok)))
-                        .cloned()
-                        .collect::<Vec<Token>>();
-                    let y_vars = subst
-                        .get(y)?
+                        .map(|(var, _)| {
+                            names.get_atom(&db.statement_by_label(*var).unwrap().math_at(1))
+                        })
+                        .collect::<HashSet<Atom>>();
+                    let step_vars = step_frame
+                        .var_list
                         .iter()
-                        .filter(|tok| step_frame.var_list.contains(&names.get_atom(tok)))
-                        .cloned()
-                        .collect::<Vec<Token>>();
-                    for (x0, y0) in x_vars.into_iter().cartesian_product(y_vars) {
-                        if x0 == y0 {
-                            return None;
-                        }
-                        let level_stmt = db.statement_by_address(self.current_level_stmt_addr);
-                        let level_frame = scopes.get(level_stmt.label())?;
-                        let level_dvs = level_frame
-                            .mandatory_dv
-                            .iter()
-                            .map(|(x, y)| {
-                                Some((
-                                    names.atom_name(*level_frame.var_list.get(*x)?).into(),
-                                    names.atom_name(*level_frame.var_list.get(*y)?).into(),
-                                ))
-                            })
-                            .collect::<Option<Vec<_>>>()?;
-                        if !(level_dvs.contains(&(x0.clone(), y0.clone()))
-                            || level_dvs.contains(&(y0, x0)))
-                        {
-                            return None;
-                        }
+                        .copied()
+                        .collect::<HashSet<Atom>>();
+                    if subst_vars == step_vars {
+                        Some((substs, num_pop))
+                    } else {
+                        None
                     }
-                }
-            }
-            for _ in 0..npop {
+                })?;
+            for _ in 0..num_pop {
                 stack.pop()?;
             }
-            let subst_conclusion = conclusion
-                .iter()
-                .flat_map(|tok| subst.get(tok).unwrap_or(&vec![tok.clone()]).clone())
-                .collect::<Vec<Token>>();
+            let subst_conclusion = conclusion.substitute(&substs);
+            // dbg!(
+            //     ctx.render_formula(&conclusion),
+            //     ctx.render_formula(&subst_conclusion),
+            //     substs
+            //         .iter()
+            //         .map(|(k, v)| (
+            //             String::from_utf8_lossy(names.atom_name(*k)),
+            //             ctx.render_formula(v)
+            //         ))
+            //         .collect::<Vec<_>>(),
+            // );
             stack.push(subst_conclusion);
             stack
         };
@@ -239,8 +243,12 @@ impl State {
     fn level_finished(&self, ctx: &Context) -> bool {
         let db = &ctx.metamath_db;
         let level_stmt = db.statement_by_address(self.current_level_stmt_addr);
-        let level_goal = stmt_to_expr(level_stmt);
-        self.proof_stack.last() == Some(&level_goal)
+        let level_goal = ctx.stmt_to_formula(level_stmt);
+        if let Some(stack_last) = self.proof_stack.last() {
+            formula_eq(stack_last, &level_goal)
+        } else {
+            false
+        }
     }
 
     pub fn next_level(&self, ctx: &Context) -> Option<Self> {
@@ -273,7 +281,7 @@ impl State {
     pub fn render_stack(&self, ctx: &Context) -> Vec<String> {
         self.proof_stack
             .iter()
-            .map(|expr| ctx.render_expr(expr))
+            .map(|expr| ctx.render_formula(expr))
             .collect()
     }
 
