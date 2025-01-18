@@ -220,17 +220,6 @@ impl State {
                 stack.pop()?;
             }
             let subst_conclusion = conclusion.substitute(&substs);
-            // dbg!(
-            //     ctx.render_formula(&conclusion),
-            //     ctx.render_formula(&subst_conclusion),
-            //     substs
-            //         .iter()
-            //         .map(|(k, v)| (
-            //             String::from_utf8_lossy(names.atom_name(*k)),
-            //             ctx.render_formula(v)
-            //         ))
-            //         .collect::<Vec<_>>(),
-            // );
             stack.push(subst_conclusion);
             stack
         };
