@@ -198,8 +198,11 @@ impl State {
         let names = db.name_result();
         let scopes = db.scope_result();
         let step_stmt = db.statement_by_address(step_addr);
-        let step_frame = scopes.get(step_stmt.label())?;
-        let hyps = &step_frame.hypotheses;
+        let step_frame = scopes.get(step_stmt.label());
+        let hyps = match step_frame {
+            Some(frame) => &frame.hypotheses,
+            None => &Default::default(),
+        };
         let proof_stack = if hyps.is_empty() {
             let formula = ctx.stmt_to_formula(step_stmt);
             let mut stack = self.proof_stack.clone();
@@ -223,7 +226,7 @@ impl State {
                             names.get_atom(&db.statement_by_label(*var).unwrap().math_at(1))
                         })
                         .collect::<HashSet<Atom>>();
-                    let step_vars = step_frame
+                    let step_vars = step_frame?
                         .var_list
                         .iter()
                         .copied()
