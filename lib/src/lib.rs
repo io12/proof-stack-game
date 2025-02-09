@@ -12,8 +12,14 @@ use metamath_rs::{
 
 pub use metamath_rs::statement::StatementAddress;
 
+pub enum TypesetMode {
+    Latex,
+    AltHtml,
+}
+
 pub struct Context {
     metamath_db: Database,
+    typeset_mode: TypesetMode,
 }
 
 fn from_utf8(bytes: &[u8]) -> String {
@@ -25,7 +31,11 @@ fn formula_eq(a: &Formula, b: &Formula) -> bool {
 }
 
 impl Context {
-    pub fn load(name: impl Into<String>, data: impl Into<Vec<u8>>) -> Self {
+    pub fn load(
+        name: impl Into<String>,
+        data: impl Into<Vec<u8>>,
+        typeset_mode: TypesetMode,
+    ) -> Self {
         let name = name.into();
         let data = data.into();
         let mut metamath_db = Database::new(DbOptions {
@@ -37,7 +47,10 @@ impl Context {
         metamath_db.scope_pass();
         metamath_db.typesetting_pass();
         metamath_db.grammar_pass();
-        Self { metamath_db }
+        Self {
+            metamath_db,
+            typeset_mode,
+        }
     }
 
     pub fn initial_state(&self, level: Option<&str>) -> State {
@@ -71,27 +84,36 @@ impl Context {
 
     fn render_token(&self, token: TokenPtr) -> String {
         let typesetting_data = self.metamath_db.typesetting_result();
-        match typesetting_data.latex_defs.get(token) {
+        let typeset_defs = match self.typeset_mode {
+            TypesetMode::Latex => &typesetting_data.latex_defs,
+            TypesetMode::AltHtml => &typesetting_data.alt_html_defs,
+        };
+        match typeset_defs.get(token) {
             Some((_, _, token)) => from_utf8(token),
             None => from_utf8(token),
         }
     }
 
+    fn render_tokens<'a>(&self, toks: impl Iterator<Item = TokenPtr<'a>>) -> String {
+        toks.map(|tok| self.render_token(tok)).join(" ")
+    }
+
     fn render_formula(&self, formula: &Formula) -> String {
         let db = &self.metamath_db;
         let names = db.name_result();
-        iter::once(formula.get_typecode())
+        let toks = iter::once(formula.get_typecode())
             .chain(formula.as_ref(db))
-            .map(|tok| self.render_token(names.atom_name(tok)))
-            .collect()
+            .map(|tok| names.atom_name(tok));
+        self.render_tokens(toks)
     }
 
     fn render_stmt(&self, stmt: StatementAddress) -> String {
-        self.metamath_db
+        let toks = self
+            .metamath_db
             .statement_by_address(stmt)
             .math_iter()
-            .map(|tok| self.render_token(tok.slice))
-            .collect()
+            .map(|tok| tok.slice);
+        self.render_tokens(toks)
     }
 
     fn hyp_addrs(&self, stmt_addr: StatementAddress) -> Vec<StatementAddress> {
@@ -176,19 +198,15 @@ impl State {
         let names = db.name_result();
         let scopes = db.scope_result();
         let step_stmt = db.statement_by_address(step_addr);
-        let step_type = step_stmt.statement_type();
-        let proof_stack = if let StatementType::Essential | StatementType::Floating = step_type {
+        let step_frame = scopes.get(step_stmt.label())?;
+        let hyps = &step_frame.hypotheses;
+        let proof_stack = if hyps.is_empty() {
             let formula = ctx.stmt_to_formula(step_stmt);
             let mut stack = self.proof_stack.clone();
             stack.push(formula);
             stack
         } else {
-            if !matches!(step_type, StatementType::Axiom | StatementType::Provable) {
-                return None;
-            }
-            let step_frame = scopes.get(step_stmt.label())?;
             let conclusion = ctx.stmt_to_formula(step_stmt);
-            let hyps = &step_frame.hypotheses;
             let mut stack = self.proof_stack.clone();
             let max_num_pop = stack.len().min(hyps.len());
             let (substs, num_pop) = hyps
@@ -274,28 +292,44 @@ impl State {
             .collect()
     }
 
-    pub fn stack_swap(&self, i: usize, j: usize) -> Self {
+    pub fn stack_swap(&self, i: usize, j: usize) -> Option<Self> {
         let mut new = self.clone();
-        new.proof_stack.swap(i, j);
-        new
+        if new.proof_stack.get(i).is_some() && new.proof_stack.get(j).is_some() {
+            new.proof_stack.swap(i, j);
+            Some(new)
+        } else {
+            None
+        }
     }
 
-    pub fn stack_delete(&self, i: usize) -> Self {
+    pub fn stack_delete(&self, i: usize) -> Option<Self> {
         let mut new = self.clone();
-        new.proof_stack.remove(i);
-        new
+        if new.proof_stack.get(i).is_some() {
+            new.proof_stack.remove(i);
+            Some(new)
+        } else {
+            None
+        }
     }
 
-    pub fn stack_copy(&self, i: usize) -> Self {
+    pub fn stack_copy(&self, i: usize) -> Option<Self> {
         let mut new = self.clone();
-        new.proof_stack.insert(i, new.proof_stack[i].clone());
-        new
+        if new.proof_stack.get(i).is_some() {
+            new.proof_stack.insert(i, new.proof_stack[i].clone());
+            Some(new)
+        } else {
+            None
+        }
     }
 
-    pub fn stack_move(&self, src: usize, dst: usize) -> Self {
+    pub fn stack_move(&self, src: usize, dst: usize) -> Option<Self> {
         let mut new = self.clone();
-        let e = new.proof_stack.remove(src);
-        new.proof_stack.insert(dst, e);
-        new
+        if new.proof_stack.get(src).is_some() && new.proof_stack.get(dst).is_some() {
+            let e = new.proof_stack.remove(src);
+            new.proof_stack.insert(dst, e);
+            Some(new)
+        } else {
+            None
+        }
     }
 }

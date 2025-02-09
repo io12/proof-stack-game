@@ -1,15 +1,28 @@
 use lib::{Context, StatementAddress};
-use std::cell::LazyCell;
 use std::fmt::Write;
+use std::sync::LazyLock;
 use yew::prelude::*;
 use yew_hooks::use_local_storage;
+
+static CTX: LazyLock<Context> = LazyLock::new(|| {
+    Context::load(
+        "set.mm",
+        include_bytes!("/tmp/dump/set.mm"),
+        lib::TypesetMode::AltHtml,
+    )
+});
+
+#[export_name = "wizer.initialize"]
+pub extern "C" fn force_init() {
+    LazyLock::force(&CTX);
+}
 
 fn string_to_html(s: String) -> Html {
     Html::from_html_unchecked(AttrValue::from(s))
 }
 
-fn render_inference(ctx: &Context, stmt_addr: StatementAddress) -> String {
-    let (hyps, conclusion) = ctx.render_inference(stmt_addr);
+fn render_inference(stmt_addr: StatementAddress) -> String {
+    let (hyps, conclusion) = CTX.render_inference(stmt_addr);
     let hyps = hyps.into_iter().fold(String::new(), |mut out, hyp| {
         write!(out, "{hyp} <br/>").unwrap();
         out
@@ -24,14 +37,13 @@ fn render_inference(ctx: &Context, stmt_addr: StatementAddress) -> String {
 
 #[function_component(App)]
 pub fn app() -> Html {
-    let ctx = LazyCell::new(|| Context::load("set.mm", include_bytes!("/tmp/dump/set.mm")));
     let storage = use_local_storage::<String>(String::from("level"));
-    let state = use_state(|| ctx.initial_state(storage.as_deref()));
-    let current_level_name = ctx.label(state.current_level_stmt_addr);
+    let state = use_state(|| CTX.initial_state(storage.as_deref()));
+    let current_level_name = CTX.label(state.current_level_stmt_addr);
     if storage.as_deref() != Some(&current_level_name) {
         storage.set(current_level_name.clone());
     }
-    let next_level = state.next_level(&ctx);
+    let next_level = state.next_level(&CTX);
     let level_finished = next_level.is_some();
     let next_level_button = {
         let state = state.clone();
@@ -49,12 +61,12 @@ pub fn app() -> Html {
         }
     };
     let deps = state
-        .buttons(&ctx)
+        .buttons(&CTX)
         .into_iter()
         .map(|(stmt_addr, opt_next_state)| {
             let state = state.clone();
-            let inference = render_inference(&ctx, stmt_addr);
-            let text = string_to_html(format!("{} {inference}", ctx.label(stmt_addr),));
+            let inference = render_inference(stmt_addr);
+            let text = string_to_html(format!("{} <br/> <br/> {inference}", CTX.label(stmt_addr)));
             let (disabled, onclick) = match opt_next_state {
                 Some(next_state) => (
                     level_finished,
@@ -70,41 +82,44 @@ pub fn app() -> Html {
         })
         .collect::<Html>();
     let stack = state
-        .render_stack(&ctx)
+        .render_stack(&CTX)
         .into_iter()
         .enumerate()
         .map(|(i, expr)| {
             let expr = string_to_html(format!("<div style='display: inline-block'> {expr} </div>"));
 
-            let up_button = {
-                let state = state.clone();
+            let [up_button, down_button, delete_button, copy_button] = [
+                ("↑", state.stack_swap(i, i - 1)),
+                ("↓", state.stack_swap(i, i + 1)),
+                ("🗑️", state.stack_delete(i)),
+                ("⿻", state.stack_copy(i)),
+            ]
+            .map(|(text, next_state)| {
+                let (disabled, onclick) = match next_state {
+                    Some(next_state) => {
+                        let state = state.clone();
+                        (
+                            false,
+                            Some(Callback::from(move |_| state.set(next_state.clone()))),
+                        )
+                    }
+                    None => (true, None),
+                };
                 html! {
-                    <button
-                        disabled={i == 0}
-                        onclick={Callback::from(move |_| state.set(state.stack_swap(i, i - 1)))}
-                    >
-                        { "↑" }
+                    <button disabled={disabled} onclick={onclick}>
+                        {text}
                     </button>
                 }
-            };
-
-            let down_button = {
-                let state = state.clone();
-                html! {
-                    <button
-                        disabled={i == state.proof_stack.len() - 1}
-                        onclick={Callback::from(move |_| state.set(state.stack_swap(i, i + 1)))}
-                    >
-                        { "↓" }
-                    </button>
-                }
-            };
+            });
 
             html! {
                 <li>
-                    { expr }
                     { up_button }
                     { down_button }
+                    { delete_button }
+                    { copy_button }
+                    { " " }
+                    { expr }
                 </li>
             }
         })
@@ -119,8 +134,8 @@ pub fn app() -> Html {
                 { "Level" }
                 { " " }
                 { current_level_name }
-                { " " }
-                { string_to_html(render_inference(&ctx, state.current_level_stmt_addr)) }
+                <br/>
+                { string_to_html(render_inference(state.current_level_stmt_addr)) }
                 { " " }
                 { next_level_button }
             </h2>
